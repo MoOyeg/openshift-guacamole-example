@@ -2,6 +2,10 @@
 
 This guide walks you through deploying Apache Guacamole on OpenShift with a sample Fedora VNC VM.
 
+## Notes
+- This example uses the vnc/rdp inside the guest OS VM option
+- As of this writing the vnc via qemu in kubevirt [is not supported yet](https://github.com/kubevirt/kubevirt/issues/14798)
+
 ## Prerequisites
 
 - OpenShift cluster with admin access
