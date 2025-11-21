@@ -1,0 +1,149 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: guacamole-api
+  namespace: guacamole
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: guacamole-api-role
+  namespace: guacamole
+rules:
+- apiGroups: [""]
+  resources: ["services"]
+  verbs: ["get", "list"]
+- apiGroups: ["kubevirt.io"]
+  resources: ["virtualmachines", "virtualmachineinstances"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: guacamole-api-rolebinding
+  namespace: guacamole
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: guacamole-api-role
+subjects:
+- kind: ServiceAccount
+  name: guacamole-api
+  namespace: guacamole
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: guacamole-add-vnc-connection
+  namespace: guacamole
+  labels:
+    app: guacamole-add-connection
+spec:
+  template:
+    metadata:
+      labels:
+        app: guacamole-add-connection
+    spec:
+      serviceAccountName: guacamole-api
+      restartPolicy: OnFailure
+      containers:
+      - name: add-connection
+        image: curlimages/curl:latest
+        command:
+        - sh
+        - -c
+        - |
+          # Wait for Guacamole to be ready
+          echo "Waiting for Guacamole to be ready..."
+          until curl -s http://guacamole:8080/guacamole/ > /dev/null; do
+            echo "Waiting for Guacamole..."
+            sleep 5
+          done
+          
+          # Get VM service details
+          VNC_HOST="fedora-vnc.guacamole.svc.cluster.local"
+          VNC_PORT="5901"
+          
+          echo "VM VNC Connection: ${VNC_HOST}:${VNC_PORT}"
+          
+          # Login to Guacamole API
+          echo "Logging into Guacamole API..."
+          TOKEN=$(curl -s -X POST \
+            'http://guacamole:8080/guacamole/api/tokens' \
+            -H 'Content-Type: application/x-www-form-urlencoded' \
+            -d 'username=guacadmin&password=guacadmin' | grep -o '"authToken":"[^"]*' | cut -d'"' -f4)
+          
+          if [ -z "$TOKEN" ]; then
+            echo "Failed to obtain authentication token"
+            exit 1
+          fi
+          
+          echo "Successfully authenticated with token: ${TOKEN:0:20}..."
+          
+          # Check if connection already exists
+          echo "Checking for existing connections..."
+          EXISTING=$(curl -s -X GET \
+            "http://guacamole:8080/guacamole/api/session/data/mysql/connections?token=${TOKEN}" | grep -o "fedora-vnc")
+          
+          if [ -n "$EXISTING" ]; then
+            echo "Connection 'fedora-vnc' already exists, skipping creation"
+            exit 0
+          fi
+          
+          # Create VNC connection
+          echo "Creating VNC connection in Guacamole..."
+          RESPONSE=$(curl -s -X POST \
+            "http://guacamole:8080/guacamole/api/session/data/mysql/connections?token=${TOKEN}" \
+            -H 'Content-Type: application/json' \
+            -d '{
+              "parentIdentifier": "ROOT",
+              "name": "Fedora VNC VM",
+              "protocol": "vnc",
+              "parameters": {
+                "hostname": "'"${VNC_HOST}"'",
+                "port": "'"${VNC_PORT}"'",
+                "password": "fedora",
+                "color-depth": "24",
+                "cursor": "remote",
+                "swap-red-blue": "false",
+                "dest-port": "",
+                "recording-exclude-output": "true",
+                "recording-exclude-mouse": "true",
+                "recording-include-keys": "false",
+                "create-recording-path": "true",
+                "enable-sftp": "false",
+                "sftp-port": "",
+                "sftp-server-alive-interval": "",
+                "enable-audio": "false",
+                "audio-servername": "",
+                "clipboard-encoding": "",
+                "disable-copy": "false",
+                "disable-paste": "false"
+              },
+              "attributes": {
+                "max-connections": "",
+                "max-connections-per-user": "",
+                "weight": "",
+                "failover-only": "",
+                "guacd-port": "",
+                "guacd-encryption": "",
+                "guacd-hostname": ""
+              }
+            }')
+          
+          echo "Response: $RESPONSE"
+          
+          if echo "$RESPONSE" | grep -q "identifier"; then
+            echo "Successfully created VNC connection to Fedora VM!"
+            echo "Access it via Guacamole web interface: http://guacamole:8080/guacamole/"
+          else
+            echo "Failed to create connection. Response: $RESPONSE"
+            exit 1
+          fi
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"

@@ -1,0 +1,78 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: guacamole-db-init
+  namespace: guacamole
+  labels:
+    app: guacamole-db-init
+spec:
+  template:
+    metadata:
+      labels:
+        app: guacamole-db-init
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: mysql
+      initContainers:
+      - name: wait-for-mysql
+        image: registry.redhat.io/rhel9/mysql-84:latest
+        command: 
+        - sh
+        - -c
+        - |
+          until mysqladmin ping -h mysql -u root --password="$MYSQL_ROOT_PASSWORD" --silent; do
+            echo 'Waiting for MySQL to be ready...'
+            sleep 2
+          done
+          echo 'MySQL is ready!'
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mysql-secret
+              key: mysql-root-password
+      containers:
+      - name: guacamole-db-init
+        image: registry.redhat.io/rhel9/mysql-84:latest
+        command:
+        - sh
+        - -c
+        - |
+          echo "Checking if database is already initialized..."
+          TABLES=$(mysql -h mysql -u root --password="$MYSQL_ROOT_PASSWORD" guacamole_db -e "SHOW TABLES;" 2>/dev/null | wc -l)
+          
+          if [ "$TABLES" -gt 1 ]; then
+            echo "Database already initialized, skipping..."
+            exit 0
+          fi
+          
+          echo "Downloading Guacamole schema..."
+          curl -L -o /tmp/initdb.sql https://raw.githubusercontent.com/apache/guacamole-client/master/extensions/guacamole-auth-jdbc/modules/guacamole-auth-jdbc-mysql/schema/001-create-schema.sql
+          curl -L -o /tmp/user.sql https://raw.githubusercontent.com/apache/guacamole-client/master/extensions/guacamole-auth-jdbc/modules/guacamole-auth-jdbc-mysql/schema/002-create-admin-user.sql
+          
+          echo "Applying schema to database..."
+          mysql -h mysql -u root --password="$MYSQL_ROOT_PASSWORD" guacamole_db < /tmp/initdb.sql
+          mysql -h mysql -u root --password="$MYSQL_ROOT_PASSWORD" guacamole_db < /tmp/user.sql
+          
+          echo "Verifying schema was applied..."
+          mysql -h mysql -u root --password="$MYSQL_ROOT_PASSWORD" guacamole_db -e "SHOW TABLES;"
+          
+          echo "Database initialization completed!"
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mysql-secret
+              key: mysql-root-password
+        - name: GUAC_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: guacamole-secret
+              key: guacamole-admin-password
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "200m"

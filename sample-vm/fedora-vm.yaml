@@ -1,0 +1,87 @@
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: fedora-vnc
+  namespace: guacamole
+  labels:
+    app: fedora-vnc
+spec:
+  runStrategy: Always
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: fedora-vnc
+    spec:
+      domain:
+        devices:
+          disks:
+          - disk:
+              bus: virtio
+            name: containerdisk
+          - disk:
+              bus: virtio
+            name: cloudinitdisk
+          interfaces:
+          - name: default
+            masquerade: {}
+        resources:
+          requests:
+            memory: 2Gi
+            cpu: 1
+      networks:
+      - name: default
+        pod: {}
+      volumes:
+      - name: containerdisk
+        containerDisk:
+          image: quay.io/containerdisks/fedora:latest
+      - name: cloudinitdisk
+        cloudInitNoCloud:
+          userData: |-
+            #cloud-config
+            hostname: fedora-vnc
+            users:
+              - name: fedora
+                sudo: ALL=(ALL) NOPASSWD:ALL
+                groups: users,wheel
+                plain_text_passwd: fedora
+                lock_passwd: false
+            chpasswd:
+              expire: false
+            # ssh_pwauth: true
+            package_update: true
+            package_upgrade: false
+            packages:
+              - tigervnc-server
+              - xorg-x11-server-Xorg
+              - xterm
+            runcmd:
+              - mkdir -p /home/fedora/.vnc
+              - echo "fedora" | vncpasswd -f > /home/fedora/.vnc/passwd
+              - chmod 600 /home/fedora/.vnc/passwd
+              - chown -R fedora:fedora /home/fedora/.vnc
+              - echo "#!/bin/sh" > /home/fedora/.vnc/xstartup
+              - echo "unset SESSION_MANAGER" >> /home/fedora/.vnc/xstartup
+              - echo "unset DBUS_SESSION_BUS_ADDRESS" >> /home/fedora/.vnc/xstartup
+              - echo "xterm &" >> /home/fedora/.vnc/xstartup
+              - echo "exec twm" >> /home/fedora/.vnc/xstartup
+              - chmod +x /home/fedora/.vnc/xstartup
+              - chown fedora:fedora /home/fedora/.vnc/xstartup
+              - su - fedora -c "vncserver :1 -geometry 1920x1080 -depth 24 -localhost no"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fedora-vnc
+  namespace: guacamole
+  labels:
+    app: fedora-vnc
+spec:
+  type: ClusterIP
+  ports:
+  - port: 5901
+    targetPort: 5901
+    protocol: TCP
+    name: vnc
+  selector:
+    kubevirt.io/vm: fedora-vnc

@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: guacamole
+  labels:
+    name: guacamole
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mysql-secret
+  namespace: guacamole
+type: Opaque
+data:
+  # root password: guacamole123
+  mysql-root-password: Z3VhY2Ftb2xlMTIz
+  # guacamole user password: guacpass123
+  mysql-password: Z3VhY3Bhc3MxMjM=
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: guacamole-secret
+  namespace: guacamole
+type: Opaque
+data:
+  # guacadmin password: admin123
+  guacamole-admin-password: YWRtaW4xMjM=
